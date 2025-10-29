@@ -4,7 +4,11 @@ import { useUserProfile } from './hooks/useUserProfile';
 import { generateInitialRadar, calculateEvolvedRadar, generateMockProperties } from './utils/radarCalculations';
 import { getCategoryById } from './data/categories';
 import { MOCK_ITEMS } from './data/mockData';
+import { loadItems } from './utils/storage'; // NEW: Import storage
 
+// Collection screens
+import { CategoryDetailScreen } from './screens/collection/CategoryDetailScreen';
+import { CollectionView } from './screens/collection/CollectionView';
 
 // Onboarding
 import { WelcomeScreen } from './screens/onboarding/WelcomeScreen';
@@ -24,7 +28,6 @@ import { PlacementReveal } from './screens/log/PlacementReveal';
 import { ScanScreen } from './screens/log/ScanScreen';
 
 // Other
-import { CollectionView } from './screens/collection/CollectionView';
 import { SommelierScreen } from './screens/sommelier/SommelierScreen';
 
 function App() {
@@ -37,6 +40,9 @@ function App() {
     getItemsForCategory,
     getRadarForCategory
   } = useUserProfile();
+
+  // NEW: State for viewing specific category detail
+  const [viewingCategory, setViewingCategory] = useState(null);
 
   const [screen, setScreen] = useState(profile.onboarded ? 'home' : 'welcome');
   const [logState, setLogState] = useState({
@@ -57,8 +63,9 @@ function App() {
     console.log('Profile:', profile);
     console.log('Profile.onboarded:', profile.onboarded);
     console.log('Profile.primaryCategory:', profile.primaryCategory);
+    console.log('Viewing category:', viewingCategory);
     console.log('Should render HomeScreen:', screen === 'home' && profile.primaryCategory);
-  }, [screen, profile]);
+  }, [screen, profile, viewingCategory]);
 
   // Navigation
   const navigate = (destination) => {
@@ -78,7 +85,34 @@ function App() {
       setShowSommelier(true);
     } else {
       setScreen(destination);
+      setViewingCategory(null); // Clear category view when navigating away
     }
+  };
+
+  // NEW: Handle viewing a specific category
+  const handleViewCategory = (categoryId) => {
+    console.log('Viewing category:', categoryId);
+    setViewingCategory(categoryId);
+  };
+
+  // NEW: Handle back from category detail
+  const handleBackFromCategory = () => {
+    console.log('Back from category detail');
+    setViewingCategory(null);
+  };
+
+  // NEW: Handle add new from category detail screen
+  const handleAddNewFromCategory = (categoryId) => {
+    console.log('Add new item to category:', categoryId);
+    setLogState({
+      isOpen: true,
+      step: 'scan',
+      category: categoryId,
+      formData: null,
+      capturedPhoto: null,
+      extractedData: null,
+      rank: null
+    });
   };
 
   // Onboarding flow
@@ -108,18 +142,19 @@ function App() {
     // Generate initial radar
     const radarData = generateInitialRadar(answers, cat.radarAttributes);
     
-    // Add mock items for demo purposes
-    const mockItems = MOCK_ITEMS[category] || [];
+    // DON'T add mock items - let user build their real collection!
+    // const mockItems = MOCK_ITEMS[category] || [];
     
     // Update profile with ALL the data
     updateProfile({
       selectedCategories: selectedCategories,
       primaryCategory: category,
-      category: category,  // <- ADD THIS LINE!
+      category: category,
       answers: answers,
       onboarded: true,
       items: {
-        [category]: mockItems
+        // Start with empty collection
+        [category]: []
       }
     });
     
@@ -139,16 +174,39 @@ function App() {
     setLogState({
       ...logState,
       category: categoryId,
-      step: 'canvas'
+      step: 'scan'
     });
   };
 
   const handleScanCapture = (scanResult) => {
     console.log('Scan result:', scanResult);
+    
+    // NEW: If scan result includes rank (from comparison flow), close log flow
+    if (scanResult.rank) {
+      console.log('Item ranked via comparison, closing log flow');
+      setLogState({
+        isOpen: false,
+        step: 'picker',
+        category: null,
+        formData: null,
+        capturedPhoto: null,
+        extractedData: null,
+        rank: null
+      });
+      
+      // Navigate to category detail to see the new item
+      if (logState.category) {
+        setScreen('collection');
+        setViewingCategory(logState.category);
+      }
+      return;
+    }
+    
+    // Original flow continues
     setLogState({
       ...logState,
       capturedPhoto: scanResult.photo,
-      extractedData: scanResult.extracted, // NEW: Pass extracted data
+      extractedData: scanResult.extracted,
       step: 'canvas'
     });
   };
@@ -157,6 +215,8 @@ function App() {
     console.log('Skipping scan, going directly to canvas');
     setLogState({
       ...logState,
+      capturedPhoto: null,
+      extractedData: null,
       step: 'canvas'
     });
   };
@@ -218,14 +278,23 @@ function App() {
       step: 'picker',
       category: null,
       formData: null,
+      capturedPhoto: null,
+      extractedData: null,
       rank: null
     });
     setScreen('home');
   };
 
-  // Safe getters with fallbacks
+  // UPDATED: Safe getters with fallbacks - now also checks localStorage
   const safeGetItemsForCategory = (categoryId) => {
-    const items = getItemsForCategory(categoryId);
+    // First try to get from profile
+    let items = getItemsForCategory(categoryId);
+    
+    // If no items in profile, check localStorage
+    if (!items || items.length === 0) {
+      items = loadItems(categoryId);
+    }
+    
     return items || [];
   };
 
@@ -275,7 +344,7 @@ function App() {
           />
         )}
 
-        {/* Main App - SIMPLIFIED CONDITION */}
+        {/* Main App */}
         {screen === 'home' && profile.primaryCategory && (
           <HomeScreen
             key="home"
@@ -286,14 +355,29 @@ function App() {
           />
         )}
 
+        {/* UPDATED: Collection View with Category Detail */}
         {screen === 'collection' && profile.primaryCategory && (
-          <CollectionView
-            key="collection"
-            userProfile={profile}
-            onBack={() => setScreen('home')}
-            onNavigate={navigate}
-            getItemsForCategory={safeGetItemsForCategory}
-          />
+          <>
+            {!viewingCategory ? (
+              // Collection overview
+              <CollectionView
+                key="collection"
+                userProfile={profile}
+                onBack={() => setScreen('home')}
+                onNavigate={navigate}
+                getItemsForCategory={safeGetItemsForCategory}
+                onViewCategory={handleViewCategory}
+              />
+            ) : (
+              // Category detail view (Radar + Rankings)
+              <CategoryDetailScreen
+                key={`category-${viewingCategory}`}
+                categoryId={viewingCategory}
+                onBack={handleBackFromCategory}
+                onAddNew={handleAddNewFromCategory}
+              />
+            )}
+          </>
         )}
       </AnimatePresence>
 

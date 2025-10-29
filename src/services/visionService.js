@@ -1,167 +1,284 @@
-import { recognizeText } from './tesseractWorker';
+/**
+ * Google Cloud Vision API Service
+ * Uses REST API for web compatibility
+ */
 
-// Configuration for which AI service to use
-const AI_SERVICE = 'tesseract'; // Options: 'tesseract', 'google', 'openai'
+const API_KEY = import.meta.env.VITE_GOOGLE_VISION_API_KEY;
+const VISION_API_URL = `https://vision.googleapis.com/v1/images:annotate?key=${API_KEY}`;
 
-// ========================================
-// TESSERACT.JS (100% FREE)
-// ========================================
-
-export const extractTextWithTesseract = async (imageData, onProgress = null) => {
+/**
+ * Extract text from image using Google Cloud Vision API
+ * @param {string} imageDataUrl - Base64 encoded image data URL
+ * @param {Function} onProgress - Progress callback (0-100)
+ * @returns {Promise<Object>} Extracted text and confidence
+ */
+export async function extractTextFromImage(imageDataUrl, onProgress = () => {}) {
   try {
-    console.log('🔍 Starting Tesseract OCR...');
-    
-    if (onProgress) onProgress(10);
-    
-    const result = await recognizeText(imageData, (progress) => {
-      if (onProgress) {
-        onProgress(10 + (progress * 0.8));
-      }
+    // Validate API key
+    if (!API_KEY || API_KEY === 'your_actual_api_key_here') {
+      throw new Error('Google Vision API key not configured. Please add VITE_GOOGLE_VISION_API_KEY to your .env file');
+    }
+
+    onProgress(10, 'Preparing image...');
+
+    // Convert data URL to base64 (remove data:image/jpeg;base64, prefix)
+    const base64Image = imageDataUrl.split(',')[1];
+
+    onProgress(30, 'Sending to Google Vision...');
+
+    // Make API request
+    const response = await fetch(VISION_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        requests: [
+          {
+            image: {
+              content: base64Image,
+            },
+            features: [
+              {
+                type: 'DOCUMENT_TEXT_DETECTION', // Best for dense text like labels
+                maxResults: 1,
+              },
+              {
+                type: 'LOGO_DETECTION', // Detect brand logos
+                maxResults: 5,
+              },
+            ],
+            imageContext: {
+              languageHints: ['en', 'fr', 'it', 'es', 'de'], // Common wine label languages
+            },
+          },
+        ],
+      }),
     });
 
-    if (onProgress) onProgress(100);
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error?.message || 'Vision API request failed');
+    }
 
-    console.log('✅ Tesseract result:', result);
-    return result;
-  } catch (error) {
-    console.error('❌ Tesseract error:', error);
-    throw error;
-  }
-};
+    onProgress(70, 'Processing results...');
 
-// ========================================
-// SMART TEXT PARSING
-// ========================================
+    const data = await response.json();
+    const result = data.responses[0];
 
-export const parseBottleInfo = (text) => {
-  console.log('📝 Parsing text:', text);
-  
-  if (!text || typeof text !== 'string') {
-    console.warn('No valid text to parse');
+    // Extract text
+    const fullText = result.fullTextAnnotation?.text || '';
+    
+    // Extract logos (brand names)
+    const logos = result.logoAnnotations?.map(logo => logo.description) || [];
+
+    onProgress(90, 'Analyzing text...');
+
+    // Parse the extracted text
+    const extracted = parseExtractedText(fullText, logos);
+
+    onProgress(100, 'Complete!');
+
     return {
-      name: null,
-      producer: null,
-      vintage: null,
-      type: null,
-      region: null,
-      alcohol: null
+      success: true,
+      text: fullText,
+      logos,
+      extracted,
+      confidence: calculateConfidence(result),
+    };
+
+  } catch (error) {
+    console.error('Google Vision API Error:', error);
+    return {
+      success: false,
+      error: error.message,
+      extracted: null,
     };
   }
+}
+
+/**
+ * Parse extracted text into structured data
+ * @param {string} text - Raw OCR text
+ * @param {string[]} logos - Detected brand logos
+ * @returns {Object} Structured drink information
+ */
+function parseExtractedText(text, logos = []) {
+  const lines = text.split('\n').filter(line => line.trim().length > 0);
   
-  const lines = text
-    .split('\n')
-    .map(l => l.trim())
-    .filter(l => l.length > 0);
-  
-  console.log('📋 Lines:', lines);
-  
-  const info = {
+  const extracted = {
     name: null,
     producer: null,
     vintage: null,
     type: null,
     region: null,
-    alcohol: null
+    abv: null,
   };
 
-  // Find vintage year (4 digits between 1900-2099)
-  const yearMatch = text.match(/\b(19|20)\d{2}\b/);
-  if (yearMatch) {
-    info.vintage = yearMatch[0];
-    console.log('📅 Found vintage:', info.vintage);
+  // Extract vintage (4-digit year between 1900-2030)
+  const vintageMatch = text.match(/\b(19[5-9]\d|20[0-2]\d|2030)\b/);
+  if (vintageMatch) {
+    extracted.vintage = vintageMatch[0];
   }
 
-  // Find alcohol percentage
-  const alcoholMatch = text.match(/(\d+(?:\.\d+)?)\s*%(?:\s*(?:vol|alc|ABV))?/i);
-  if (alcoholMatch) {
-    info.alcohol = alcoholMatch[1] + '%';
-    console.log('🍷 Found alcohol:', info.alcohol);
+  // Extract ABV (alcohol percentage)
+  const abvMatch = text.match(/(\d{1,2}(?:\.\d)?)\s*%\s*(?:alc|vol|ABV)?/i);
+  if (abvMatch) {
+    extracted.abv = `${abvMatch[1]}%`;
   }
 
-  // Detect wine types
-  const wineTypes = ['Cabernet', 'Merlot', 'Pinot Noir', 'Chardonnay', 'Sauvignon', 'Riesling', 'Syrah', 'Malbec', 'Zinfandel', 'Pinot Grigio'];
-  const whiskeyTypes = ['Bourbon', 'Scotch', 'Whisky', 'Whiskey', 'Rye', 'Single Malt', 'Blended'];
-  const spiritTypes = ['Vodka', 'Gin', 'Rum', 'Tequila', 'Mezcal', 'Cognac', 'Brandy'];
-  
-  for (const type of [...wineTypes, ...whiskeyTypes, ...spiritTypes]) {
-    if (text.toLowerCase().includes(type.toLowerCase())) {
-      info.type = type;
-      console.log('🏷️ Found type:', info.type);
-      break;
-    }
+  // Use detected logos as producer
+  if (logos.length > 0) {
+    extracted.producer = logos[0];
   }
 
-  // Use first substantial line as potential name
+  // Extract producer and name from text
   if (lines.length > 0) {
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      // Skip very short lines and year-only lines
-      if (line.length > 2 && !line.match(/^\d{4}$/) && line.length < 60) {
-        if (!info.name) {
-          info.name = line;
-          console.log('📛 Found name:', info.name);
-        } else if (!info.producer && line !== info.name) {
-          info.producer = line;
-          console.log('🏢 Found producer:', info.producer);
-          break;
-        }
-      }
-    }
-  }
-
-  // If we found nothing, use first line as name
-  if (!info.name && lines.length > 0) {
-    info.name = lines[0];
-    console.log('📛 Using first line as name:', info.name);
-  }
-
-  console.log('✅ Final parsed info:', info);
-  return info;
-};
-
-// ========================================
-// MAIN EXTRACTION FUNCTION
-// ========================================
-
-export const extractBottleInfo = async (imageData, onProgress = null) => {
-  console.log('🚀 Starting extraction with:', AI_SERVICE);
-
-  let result;
-
-  try {
-    if (onProgress) onProgress(5);
-
-    // Use configured AI service
-    if (AI_SERVICE === 'tesseract') {
-      result = await extractTextWithTesseract(imageData, onProgress);
-    } else {
-      throw new Error(`AI service ${AI_SERVICE} not implemented`);
-    }
-
-    console.log('📊 Raw extraction result:', result);
-
-    // Always parse the text
-    const parsed = parseBottleInfo(result.text);
-    result.parsed = parsed;
-
-    console.log('🎯 Final result with parsed data:', result);
-    return result;
-  } catch (error) {
-    console.error('💥 Vision extraction failed:', error);
+    // First substantial line is usually the name or producer
+    extracted.name = lines[0].trim();
     
-    // Return empty result instead of throwing
-    return {
-      text: '',
-      confidence: 0,
-      lines: [],
-      parsed: {
-        name: null,
-        producer: null,
-        vintage: null,
-        type: null,
-        region: null,
-        alcohol: null
+    if (lines.length > 1) {
+      // Second line might be producer if no logo detected
+      if (!extracted.producer) {
+        extracted.producer = lines[1].trim();
       }
-    };
+    }
   }
-};
+
+  // Detect wine type
+  extracted.type = detectType(text);
+
+  // Detect region
+  extracted.region = detectRegion(text);
+
+  return extracted;
+}
+
+/**
+ * Detect drink type from text
+ * @param {string} text - OCR text
+ * @returns {string|null} Detected type
+ */
+function detectType(text) {
+  const lower = text.toLowerCase();
+
+  // Wine types
+  if (lower.match(/\b(cabernet|merlot|pinot noir|syrah|malbec|grenache|zinfandel)\b/)) {
+    return 'Red Wine';
+  }
+  if (lower.match(/\b(chardonnay|sauvignon blanc|riesling|pinot grigio|pinot gris)\b/)) {
+    return 'White Wine';
+  }
+  if (lower.match(/\b(rosé|rose)\b/)) {
+    return 'Rosé';
+  }
+  if (lower.match(/\b(champagne|prosecco|cava|sparkling)\b/)) {
+    return 'Sparkling Wine';
+  }
+
+  // Whiskey types
+  if (lower.match(/\b(bourbon|scotch|whiskey|whisky|rye)\b/)) {
+    return 'Whiskey';
+  }
+
+  // Spirits
+  if (lower.match(/\b(gin|vodka|rum|tequila|mezcal)\b/)) {
+    return 'Spirit';
+  }
+
+  return null;
+}
+
+/**
+ * Detect wine region from text
+ * @param {string} text - OCR text
+ * @returns {string|null} Detected region
+ */
+function detectRegion(text) {
+  const regions = [
+    'bordeaux', 'burgundy', 'champagne', 'rhone', 'loire', 'alsace', // France
+    'napa valley', 'sonoma', 'paso robles', 'willamette valley', // USA
+    'tuscany', 'piedmont', 'veneto', 'sicily', 'barolo', 'chianti', // Italy
+    'rioja', 'priorat', 'ribera del duero', // Spain
+    'marlborough', 'central otago', 'hawke\'s bay', // New Zealand
+    'barossa valley', 'margaret river', 'yarra valley', // Australia
+    'douro', 'alentejo', // Portugal
+    'mosel', 'rheingau', 'pfalz', // Germany
+  ];
+
+  const lower = text.toLowerCase();
+  
+  for (const region of regions) {
+    if (lower.includes(region)) {
+      // Capitalize properly
+      return region.split(' ').map(word => 
+        word.charAt(0).toUpperCase() + word.slice(1)
+      ).join(' ');
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Calculate overall confidence score
+ * @param {Object} result - Vision API result
+ * @returns {number} Confidence score (0-100)
+ */
+function calculateConfidence(result) {
+  if (!result.fullTextAnnotation) return 0;
+  
+  // Average confidence of all detected words
+  const pages = result.fullTextAnnotation.pages || [];
+  let totalConfidence = 0;
+  let wordCount = 0;
+
+  pages.forEach(page => {
+    page.blocks?.forEach(block => {
+      block.paragraphs?.forEach(paragraph => {
+        paragraph.words?.forEach(word => {
+          totalConfidence += word.confidence || 0;
+          wordCount++;
+        });
+      });
+    });
+  });
+
+  return wordCount > 0 ? Math.round((totalConfidence / wordCount) * 100) : 0;
+}
+
+/**
+ * Test if API key is valid
+ * @returns {Promise<boolean>} True if API key works
+ */
+export async function testGoogleVisionAPI() {
+  try {
+    if (!API_KEY || API_KEY === 'your_actual_api_key_here') {
+      console.error('❌ Google Vision API key not configured');
+      return false;
+    }
+
+    // Test with a simple request
+    const testImage = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const base64 = testImage.split(',')[1];
+
+    const response = await fetch(VISION_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        requests: [{ image: { content: base64 }, features: [{ type: 'TEXT_DETECTION' }] }]
+      }),
+    });
+
+    if (response.ok) {
+      console.log('✅ Google Vision API key is valid');
+      return true;
+    } else {
+      console.error('❌ Google Vision API key is invalid');
+      return false;
+    }
+  } catch (error) {
+    console.error('❌ Google Vision API test failed:', error);
+    return false;
+  }
+}

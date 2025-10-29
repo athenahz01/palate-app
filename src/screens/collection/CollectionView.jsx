@@ -6,7 +6,8 @@ export function CollectionView({
   userProfile, 
   onBack, 
   onNavigate,
-  getItemsForCategory 
+  getItemsForCategory,
+  onViewCategory // NEW: callback to view category detail
 }) {
   return (
     <div className="min-h-screen pb-28 bg-cream">
@@ -29,6 +30,10 @@ export function CollectionView({
           const cat = getCategoryById(catId);
           const items = getItemsForCategory(catId);
           
+          // Sort items by rank to get top ranked
+          const sortedItems = [...items].sort((a, b) => (a.rank || 0) - (b.rank || 0));
+          const topItem = sortedItems[0];
+          
           return (
             <motion.div
               key={catId}
@@ -37,8 +42,8 @@ export function CollectionView({
               transition={{ delay: index * 0.1 }}
             >
               <Card
-                onClick={() => {/* Navigate to category detail */}}
-                className="border-l-4"
+                onClick={() => onViewCategory && onViewCategory(catId)}
+                className="border-l-4 cursor-pointer hover:shadow-lg transition-shadow"
                 style={{ borderLeftColor: cat.color }}
               >
                 <div className="flex items-center justify-between mb-4">
@@ -54,10 +59,25 @@ export function CollectionView({
                   <div className="text-xl text-slate">→</div>
                 </div>
 
-                {items.length > 0 && (
+                {items.length > 0 && topItem && (
                   <div className="pl-14">
                     <p className="text-sm text-slate mb-1">Top ranked:</p>
-                    <p className="font-serif">{items[0].name}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-serif">{topItem.name}</p>
+                      {topItem.score && (
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-green-50 text-green-600">
+                          {topItem.score.toFixed(1)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {items.length === 0 && (
+                  <div className="pl-14">
+                    <p className="text-sm text-slate italic">
+                      Start your {cat.name.toLowerCase()} collection
+                    </p>
                   </div>
                 )}
               </Card>
