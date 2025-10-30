@@ -1,7 +1,9 @@
 /**
  * Google Cloud Vision API Service
  * Uses REST API for web compatibility
+ * WITH LIQUOR KNOWLEDGE DATABASE INTEGRATION ✨
  */
+import { enrichLiquorData } from './liquorKnowledgeDatabase';
 
 const API_KEY = import.meta.env.VITE_GOOGLE_VISION_API_KEY;
 const VISION_API_URL = `https://vision.googleapis.com/v1/images:annotate?key=${API_KEY}`;
@@ -10,9 +12,10 @@ const VISION_API_URL = `https://vision.googleapis.com/v1/images:annotate?key=${A
  * Extract text from image using Google Cloud Vision API
  * @param {string} imageDataUrl - Base64 encoded image data URL
  * @param {Function} onProgress - Progress callback (0-100)
+ * @param {string} category - Category type ('wine', 'whiskey', 'cocktail', etc.)
  * @returns {Promise<Object>} Extracted text and confidence
  */
-export async function extractTextFromImage(imageDataUrl, onProgress = () => {}) {
+export async function extractTextFromImage(imageDataUrl, onProgress = () => {}, category = 'wine') {
   try {
     // Validate API key
     if (!API_KEY || API_KEY === 'your_actual_api_key_here') {
@@ -72,10 +75,15 @@ export async function extractTextFromImage(imageDataUrl, onProgress = () => {}) 
     // Extract logos (brand names)
     const logos = result.logoAnnotations?.map(logo => logo.description) || [];
 
-    onProgress(90, 'Analyzing text...');
+    onProgress(80, 'Analyzing text...');
 
-    // Parse the extracted text
+    // Parse the extracted text (YOUR EXISTING FUNCTION)
     const extracted = parseExtractedText(fullText, logos);
+
+    onProgress(85, 'Searching knowledge database...');
+
+    // ✨ NEW: Enrich with knowledge database
+    const enriched = enrichLiquorData(extracted, category);
 
     onProgress(100, 'Complete!');
 
@@ -83,8 +91,10 @@ export async function extractTextFromImage(imageDataUrl, onProgress = () => {}) 
       success: true,
       text: fullText,
       logos,
-      extracted,
+      extracted: enriched, // Return enriched data instead of raw extracted
       confidence: calculateConfidence(result),
+      enriched: enriched.enriched || false, // Flag if database match found
+      enrichmentConfidence: enriched.enrichmentConfidence || 0,
     };
 
   } catch (error) {

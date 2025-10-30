@@ -22,10 +22,10 @@ import { HomeScreen } from './screens/home/HomeScreen';
 
 // Log Flow
 import { CategoryPicker } from './screens/log/CategoryPicker';
-import { MemoryCanvas } from './screens/log/MemoryCanvas';
+import MemoryCanvas from './screens/log/MemoryCanvas';
 import { ComparisonScreen } from './screens/log/ComparisonScreen';
 import { PlacementReveal } from './screens/log/PlacementReveal';
-import { ScanScreen } from './screens/log/ScanScreen';
+import ScanScreen from './screens/log/ScanScreen';
 
 // Other
 import { SommelierScreen } from './screens/sommelier/SommelierScreen';
